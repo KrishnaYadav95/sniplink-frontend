@@ -34,7 +34,7 @@ export default function App() {
     } catch {}
   };
 
-  uuseEffect(() => {
+  useEffect(() => {
     if (auth) fetchUrls(auth);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth]);
