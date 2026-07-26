@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-const API = "http://localhost:8080";
+const API = "https://sniplink-backend-production.up.railway.app/login";
 
 const getAuth = (user, pass) =>
   "Basic " + btoa(`${user}:${pass}`);
@@ -38,7 +38,7 @@ export default function App() {
     if (auth) fetchUrls(auth);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth]);
-  
+
   const handleRegister = async () => {
     setAuthError("");
     setLoading(true);
