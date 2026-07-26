@@ -34,10 +34,11 @@ export default function App() {
     } catch {}
   };
 
-  useEffect(() => {
-    if (auth) fetchUrls();
+  uuseEffect(() => {
+    if (auth) fetchUrls(auth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth]);
-
+  
   const handleRegister = async () => {
     setAuthError("");
     setLoading(true);
