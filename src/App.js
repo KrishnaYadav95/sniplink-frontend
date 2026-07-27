@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 
-const API = "https://sniplink-backend-production.up.railway.app";
+const API = "https://sniplink-backend-1.onrender.com";
 
-const API = "https://sniplink-backend-production.up.railway.app";
+
 const getAuth = (user, pass) =>
   "Basic " + btoa(`${user}:${pass}`);
 
