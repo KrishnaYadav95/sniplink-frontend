@@ -63,26 +63,58 @@ export default function App() {
   };
 
   const handleLogin = async () => {
-    setAuthError("");
-    setLoading(true);
-    try {
-      const res = await fetch(`${API}/url/allurl`, {
-        headers: { Authorization: getAuth(authForm.username, authForm.password) },
+  setAuthError("");
+  setLoading(true);
+
+  try {
+    const res = await fetch(`${API}/user/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(authForm),
+    });
+
+    if (res.ok) {
+
+      // Login successful
+      const user = await res.json();
+
+      const userAuth = {
+        username: authForm.username,
+        password: authForm.password,
+      };
+
+      setAuth(userAuth);
+
+      // Fetch user's URLs after authentication
+      const urlRes = await fetch(`${API}/url/allurl`, {
+        headers: {
+          Authorization: getAuth(
+            userAuth.username,
+            userAuth.password
+          ),
+        },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setAuth(authForm);
-        setUrls(data);
-        setPage("dashboard");
-        setAuthForm(initialAuth);
-      } else {
-        setAuthError("Wrong username or password.");
+
+      if (urlRes.ok) {
+        setUrls(await urlRes.json());
       }
-    } catch {
-      setAuthError("Server unreachable. Is your backend running?");
+
+      setPage("dashboard");
+      setAuthForm(initialAuth);
+
+    } else {
+      setAuthError("Wrong username or password.");
     }
-    setLoading(false);
-  };
+
+  } catch (error) {
+    console.log(error);
+    setAuthError("Server unreachable. Is your backend running?");
+  }
+
+  setLoading(false);
+};
 
   const handleShorten = async () => {
     if (!longUrl.trim()) return;
