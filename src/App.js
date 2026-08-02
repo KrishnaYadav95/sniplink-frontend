@@ -4,10 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 // REACT_APP_ and are inlined at BUILD time by webpack. The variable name is
 // process.env.REACT_APP_*, NOT import.meta.env.VITE_*.
 //
-// Set REACT_APP_API_URL in Vercel → Project → Environments, then redeploy
-// with the build cache unchecked. Changing the variable without redeploying
-// does nothing — it's baked into the bundle at build time.
-const API = (process.env.REACT_APP_API_URL || "https://sniplink-backend-1.onrender.com").replace(/\/$/, "");
+// Set REACT_APP_API_URL in Render → your frontend service → Environment,
+// then redeploy with the build cache cleared. Changing the variable without
+// redeploying does nothing — it's baked into the bundle at build time.
+const API = (process.env.REACT_APP_API_URL || "https://sniplink-backend-55vo.onrender.com").replace(/\/$/, "");
 
 const initialAuth = { username: "", password: "" };
 
