@@ -27,7 +27,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const request = async (path, options = {}) => {
   const token = localStorage.getItem(TOKEN_KEY);
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const RETRY_STATUS = [502, 503, 504];
+
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const response = await fetch(`${API}${path}`, {
         credentials: "include",
@@ -39,15 +41,21 @@ const request = async (path, options = {}) => {
         },
       });
 
-      return response;
-    } catch (cause) {
-      // First network failure: Render is probably waking up.
-      if (attempt === 0) {
-        await sleep(5000);
+      // Render cold start
+      if (RETRY_STATUS.includes(response.status) && attempt < 2) {
+        await sleep(8000);
         continue;
       }
 
-      throw new Error("offline", { cause });
+      return response;
+    } catch (err) {
+      // Network error (server sleeping)
+      if (attempt < 2) {
+        await sleep(8000);
+        continue;
+      }
+
+      throw new Error("offline");
     }
   }
 };
@@ -180,9 +188,13 @@ const handleRegister = async () => {
       loadUrls();
     } else if (res.status === 401 || res.status === 403) {
       setAuthError("Wrong username or password.");
-    } else {
-      setAuthError("Something went wrong signing in. Please try again.");
-    }
+    } else if ([500, 502, 503, 504].includes(res.status)) {
+    setAuthError(
+        "Starting backend... Please wait 20-30 seconds and try again."
+    );
+} else {
+    setAuthError("Something went wrong signing in.");
+}
   } catch {
     setAuthError(OFFLINE_MSG);
   }
