@@ -128,26 +128,26 @@ export default function App() {
     };
   }, [loadUrls]);
 
-  const handleRegister = async () => {
-    setAuthError("");
-    setLoading(true);
-    try {
-      const res = await request("/user/register", {
-        method: "POST",
-        body: JSON.stringify(authForm),
-      });
-      if (res.ok) {
-        showToast("Account created! Please log in.");
-        setPage("login");
-        setAuthForm(initialAuth);
-      } else {
-        setAuthError("Registration failed. Try a different username.");
-      }
-    } catch {
-      setAuthError(OFFLINE_MSG);
+const handleRegister = async () => {
+  setAuthError("");
+  setLoading(true);
+  try {
+    const res = await request("/user/register", {
+      method: "POST",
+      body: JSON.stringify(authForm),
+    });
+    if (res.ok) {
+      // Auto-login after register
+      await handleLogin();
+    } else {
+      setAuthError("Registration failed. Try a different username.");
+      setLoading(false);
     }
+  } catch {
+    setAuthError(OFFLINE_MSG);
     setLoading(false);
-  };
+  }
+};
 
   const handleLogin = async (retryCount = 0) => {
   setAuthError("");
@@ -174,7 +174,7 @@ export default function App() {
     }
   } catch {
     if (retryCount < 2) {
-      setTimeout(() => handleLogin(retryCount + 1), 3000);
+      setTimeout(() => handleLogin(retryCount + 1), 5000);
     } else {
       setAuthError(OFFLINE_MSG);
       setLoading(false);
