@@ -22,21 +22,33 @@ const OFFLINE_MSG =
 //    session-cookie based, keeps working — the two auth modes coexist)
 // 2. Thrown errors mean NETWORK failure only, not HTTP errors (401/500 return normally)
 // 3. Content-Type is only sent when there's a body
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const request = async (path, options = {}) => {
   const token = localStorage.getItem(TOKEN_KEY);
 
-  try {
-    return await fetch(`${API}${path}`, {
-      credentials: "include",
-      ...options,
-      headers: {
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options.headers,
-      },
-    });
-  } catch (cause) {
-    throw new Error("offline", { cause });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(`${API}${path}`, {
+        credentials: "include",
+        ...options,
+        headers: {
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...options.headers,
+        },
+      });
+
+      return response;
+    } catch (cause) {
+      // First network failure: Render is probably waking up.
+      if (attempt === 0) {
+        await sleep(5000);
+        continue;
+      }
+
+      throw new Error("offline", { cause });
+    }
   }
 };
 
