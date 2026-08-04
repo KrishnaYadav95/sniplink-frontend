@@ -131,30 +131,15 @@ export default function App() {
 const handleRegister = async () => {
   setAuthError("");
   setLoading(true);
-  const savedForm = { ...authForm }; // credentials save karo pehle
   try {
     const res = await request("/user/register", {
       method: "POST",
-      body: JSON.stringify(savedForm),
+      body: JSON.stringify(authForm),
     });
     if (res.ok) {
-      // directly login karo saved credentials se
-      const loginRes = await request("/user/login", {
-        method: "POST",
-        body: JSON.stringify(savedForm),
-      });
-      if (loginRes.ok) {
-        const data = await loginRes.json();
-        if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
-        setUser(data.username || savedForm.username);
-        setAuthForm(initialAuth);
-        setPage("dashboard");
-        loadUrls();
-      } else {
-        showToast("Account created! Please log in.");
-        setPage("login");
-        setAuthForm(initialAuth);
-      }
+      showToast("Account created! Please log in.");
+      setPage("login");
+      setAuthForm(initialAuth);
     } else {
       setAuthError("Registration failed. Try a different username.");
     }
@@ -164,7 +149,7 @@ const handleRegister = async () => {
   setLoading(false);
 };
 
-  const handleLogin = async (retryCount = 0) => {
+ const handleLogin = async () => {
   setAuthError("");
   setLoading(true);
   try {
@@ -172,7 +157,6 @@ const handleRegister = async () => {
       method: "POST",
       body: JSON.stringify(authForm),
     });
-
     if (res.ok) {
       const data = await res.json();
       if (data.token) {
@@ -188,13 +172,7 @@ const handleRegister = async () => {
       setAuthError("Something went wrong signing in. Please try again.");
     }
   } catch {
-    if (retryCount < 2) {
-      setTimeout(() => handleLogin(retryCount + 1), 5000);
-    } else {
-      setAuthError(OFFLINE_MSG);
-      setLoading(false);
-    }
-    return;
+    setAuthError(OFFLINE_MSG);
   }
   setLoading(false);
 };
