@@ -149,40 +149,40 @@ export default function App() {
     setLoading(false);
   };
 
-  const handleLogin = async () => {
-    setAuthError("");
-    setLoading(true);
-    try {
-      const res = await request("/user/login", {
-        method: "POST",
-        body: JSON.stringify(authForm),
-      });
+  const handleLogin = async (retryCount = 0) => {
+  setAuthError("");
+  setLoading(true);
+  try {
+    const res = await request("/user/login", {
+      method: "POST",
+      body: JSON.stringify(authForm),
+    });
 
-      if (res.ok) {
-        const data = await res.json();
-
-        // This is the actual fix: store the JWT so `request()` can attach it
-        // as an Authorization header on every subsequent call. Without this
-        // line the backend's JwtFilter never sees a token and every request
-        // silently falls back to session-cookie auth instead.
-        if (data.token) {
-          localStorage.setItem(TOKEN_KEY, data.token);
-        }
-
-        setUser(data.username || authForm.username);
-        setAuthForm(initialAuth);
-        setPage("dashboard");
-        loadUrls();
-      } else if (res.status === 401 || res.status === 403) {
-        setAuthError("Wrong username or password.");
-      } else {
-        setAuthError("Something went wrong signing in. Please try again.");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.token) {
+        localStorage.setItem(TOKEN_KEY, data.token);
       }
-    } catch {
-      setAuthError(OFFLINE_MSG);
+      setUser(data.username || authForm.username);
+      setAuthForm(initialAuth);
+      setPage("dashboard");
+      loadUrls();
+    } else if (res.status === 401 || res.status === 403) {
+      setAuthError("Wrong username or password.");
+    } else {
+      setAuthError("Something went wrong signing in. Please try again.");
     }
-    setLoading(false);
-  };
+  } catch {
+    if (retryCount < 2) {
+      setTimeout(() => handleLogin(retryCount + 1), 3000);
+    } else {
+      setAuthError(OFFLINE_MSG);
+      setLoading(false);
+    }
+    return;
+  }
+  setLoading(false);
+};
 
   const handleLogout = async () => {
     try {
