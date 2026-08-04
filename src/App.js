@@ -131,22 +131,37 @@ export default function App() {
 const handleRegister = async () => {
   setAuthError("");
   setLoading(true);
+  const savedForm = { ...authForm }; // credentials save karo pehle
   try {
     const res = await request("/user/register", {
       method: "POST",
-      body: JSON.stringify(authForm),
+      body: JSON.stringify(savedForm),
     });
     if (res.ok) {
-      // Auto-login after register
-      await handleLogin();
+      // directly login karo saved credentials se
+      const loginRes = await request("/user/login", {
+        method: "POST",
+        body: JSON.stringify(savedForm),
+      });
+      if (loginRes.ok) {
+        const data = await loginRes.json();
+        if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+        setUser(data.username || savedForm.username);
+        setAuthForm(initialAuth);
+        setPage("dashboard");
+        loadUrls();
+      } else {
+        showToast("Account created! Please log in.");
+        setPage("login");
+        setAuthForm(initialAuth);
+      }
     } else {
       setAuthError("Registration failed. Try a different username.");
-      setLoading(false);
     }
   } catch {
     setAuthError(OFFLINE_MSG);
-    setLoading(false);
   }
+  setLoading(false);
 };
 
   const handleLogin = async (retryCount = 0) => {
