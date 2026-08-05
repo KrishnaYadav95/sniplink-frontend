@@ -1,12 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 
-// This is Create React App (CRA), so environment variables must start with
-// REACT_APP_ and are inlined at BUILD time by webpack. The variable name is
-// process.env.REACT_APP_*, NOT import.meta.env.VITE_*.
-//
-// Set REACT_APP_API_URL in Render → your frontend service → Environment,
-// then redeploy with the build cache cleared. Changing the variable without
-// redeploying does nothing — it's baked into the bundle at build time.
 const API = (process.env.REACT_APP_API_URL || "https://sniplink-backend-55vo.onrender.com").replace(/\/$/, "");
 
 const TOKEN_KEY = "sniplink_token";
@@ -16,17 +9,10 @@ const initialAuth = { username: "", password: "" };
 const OFFLINE_MSG =
   "Can't reach the server. Free Render instances sleep after inactivity - give it up to a minute and try again.";
 
-// Every backend call goes through here to guarantee:
-// 1. Authorization: Bearer <jwt> is attached when we have a token
-//    (credentials: "include" is kept only so OAuth2 login, which is
-//    session-cookie based, keeps working — the two auth modes coexist)
-// 2. Thrown errors mean NETWORK failure only, not HTTP errors (401/500 return normally)
-// 3. Content-Type is only sent when there's a body
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const request = async (path, options = {}) => {
   const token = localStorage.getItem(TOKEN_KEY);
-
   const RETRY_STATUS = [502, 503, 504];
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -41,7 +27,6 @@ const request = async (path, options = {}) => {
         },
       });
 
-      // Render cold start
       if (RETRY_STATUS.includes(response.status) && attempt < 2) {
         await sleep(8000);
         continue;
@@ -49,12 +34,10 @@ const request = async (path, options = {}) => {
 
       return response;
     } catch (err) {
-      // Network error (server sleeping)
       if (attempt < 2) {
         await sleep(8000);
         continue;
       }
-
       throw new Error("offline");
     }
   }
@@ -81,14 +64,16 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const loadUrls = useCallback(async () => {
+  // loadUrls does NOT redirect to login on 401 during dashboard load after fresh login
+  // because the JWT might still be propagating. It silently fails instead.
+  const loadUrls = useCallback(async (redirectOn401 = true) => {
     try {
       const res = await request("/url/allurl");
       if (res.ok) {
         setUrls(await res.json());
         return;
       }
-      if (res.status === 401 || res.status === 403) {
+      if ((res.status === 401 || res.status === 403) && redirectOn401) {
         localStorage.removeItem(TOKEN_KEY);
         setUser(null);
         setUrls([]);
@@ -100,7 +85,7 @@ export default function App() {
     }
   }, []);
 
-  // Bootstrap: discover existing session (JWT in localStorage, or OAuth2 session cookie)
+  // Bootstrap: on page load, check if user is already logged in via JWT or OAuth session
   useEffect(() => {
     let cancelled = false;
 
@@ -117,17 +102,17 @@ export default function App() {
 
         if (cancelled) return;
 
-       if (res.ok) {
-    const data = await res.json();
-    if (data.token) {
-        localStorage.setItem(TOKEN_KEY, data.token);  // store first
-    }
-    setUser(data.username || authForm.username);
-    setAuthForm(initialAuth);
-    setPage("dashboard");  // then update state
-    loadUrls();
-}else if (res.status === 401 || res.status === 403) {
-          // stale/invalid token left over from a previous session
+        if (res.ok) {
+          const data = await res.json();
+          // /user/me returns { authenticated: true, username: "..." }
+          if (data.authenticated) {
+            setUser(data.username);
+            setPage("dashboard");
+            loadUrls(); // safe here — session already established
+            return;
+          }
+        } else if (res.status === 401 || res.status === 403) {
+          // stale or invalid token — clear it
           localStorage.removeItem(TOKEN_KEY);
         }
 
@@ -149,58 +134,67 @@ export default function App() {
     };
   }, [loadUrls]);
 
-const handleRegister = async () => {
-  setAuthError("");
-  setLoading(true);
-  try {
-    const res = await request("/user/register", {
-      method: "POST",
-      body: JSON.stringify(authForm),
-    });
-    if (res.ok) {
-      showToast("Account created! Please log in.");
-      setPage("login");
-      setAuthForm(initialAuth);
-    } else {
-      setAuthError("Registration failed. Try a different username.");
+  // Load URLs whenever page becomes dashboard
+  // This handles the case where login sets page to dashboard
+  // but loadUrls() called right after login may fail due to timing
+  useEffect(() => {
+    if (page === "dashboard" && user) {
+      loadUrls(false); // false = don't redirect on 401, just fail silently
     }
-  } catch {
-    setAuthError(OFFLINE_MSG);
-  }
-  setLoading(false);
-};
+  }, [page, user, loadUrls]);
 
- const handleLogin = async () => {
-  setAuthError("");
-  setLoading(true);
-  try {
-    const res = await request("/user/login", {
-      method: "POST",
-      body: JSON.stringify(authForm),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.token) {
-        localStorage.setItem(TOKEN_KEY, data.token);
+  const handleRegister = async () => {
+    setAuthError("");
+    setLoading(true);
+    try {
+      const res = await request("/user/register", {
+        method: "POST",
+        body: JSON.stringify(authForm),
+      });
+      if (res.ok) {
+        showToast("Account created! Please log in.");
+        setPage("login");
+        setAuthForm(initialAuth);
+      } else {
+        setAuthError("Registration failed. Try a different username.");
       }
-      setUser(data.username || authForm.username);
-      setAuthForm(initialAuth);
-      setPage("dashboard");
-      loadUrls();
-    } else if (res.status === 401 || res.status === 403) {
-      setAuthError("Wrong username or password.");
-    } else if ([500, 502, 503, 504].includes(res.status)) {
-    setAuthError(
-        "Starting backend... Please wait 20-30 seconds and try again."
-    );
-} else {
-    setAuthError("Something went wrong signing in.");
-}
-  } catch {
-    setAuthError(OFFLINE_MSG);
-  }
-  setLoading(false);
-};
+    } catch {
+      setAuthError(OFFLINE_MSG);
+    }
+    setLoading(false);
+  };
+
+  const handleLogin = async () => {
+    setAuthError("");
+    setLoading(true);
+    try {
+      const res = await request("/user/login", {
+        method: "POST",
+        body: JSON.stringify(authForm),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Store token FIRST before any state update
+        if (data.token) {
+          localStorage.setItem(TOKEN_KEY, data.token);
+        }
+        setUser(data.username || authForm.username);
+        setAuthForm(initialAuth);
+        setPage("dashboard");
+        // Don't call loadUrls() here — the useEffect above handles it
+        // when page becomes "dashboard", avoiding the race condition
+      } else if (res.status === 401 || res.status === 403) {
+        setAuthError("Wrong username or password.");
+      } else if ([500, 502, 503, 504].includes(res.status)) {
+        setAuthError("Starting backend... Please wait 20-30 seconds and try again.");
+      } else {
+        setAuthError("Something went wrong signing in.");
+      }
+    } catch {
+      setAuthError(OFFLINE_MSG);
+    }
+    setLoading(false);
+  };
 
   const handleLogout = async () => {
     try {
@@ -226,7 +220,7 @@ const handleRegister = async () => {
       if (res.ok) {
         setResult(await res.json());
         setLongUrl("");
-        loadUrls();
+        loadUrls(false);
         showToast("Short URL created!");
       } else if (res.status === 401 || res.status === 403) {
         localStorage.removeItem(TOKEN_KEY);
@@ -335,8 +329,7 @@ const handleRegister = async () => {
             Make them beautiful.
           </h1>
           <p style={styles.heroSub}>
-            Sniplink turns any URL into a clean, shareable short link in one
-            click.
+            Sniplink turns any URL into a clean, shareable short link in one click.
           </p>
           <div style={styles.heroBtns}>
             <button
@@ -378,9 +371,7 @@ const handleRegister = async () => {
               placeholder="Username"
               autoComplete="username"
               value={authForm.username}
-              onChange={(e) =>
-                setAuthForm({ ...authForm, username: e.target.value })
-              }
+              onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
             />
             <input
               style={styles.input}
@@ -388,9 +379,7 @@ const handleRegister = async () => {
               placeholder="Password"
               autoComplete="current-password"
               value={authForm.password}
-              onChange={(e) =>
-                setAuthForm({ ...authForm, password: e.target.value })
-              }
+              onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
               onKeyDown={(e) => isEnterSubmit(e) && handleLogin()}
             />
             {authError && <div style={styles.error}>{authError}</div>}
@@ -443,9 +432,7 @@ const handleRegister = async () => {
               placeholder="Username"
               autoComplete="username"
               value={authForm.username}
-              onChange={(e) =>
-                setAuthForm({ ...authForm, username: e.target.value })
-              }
+              onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
             />
             <input
               style={styles.input}
@@ -453,9 +440,7 @@ const handleRegister = async () => {
               placeholder="Password"
               autoComplete="new-password"
               value={authForm.password}
-              onChange={(e) =>
-                setAuthForm({ ...authForm, password: e.target.value })
-              }
+              onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
               onKeyDown={(e) => isEnterSubmit(e) && handleRegister()}
             />
             {authError && <div style={styles.error}>{authError}</div>}
@@ -515,9 +500,7 @@ const handleRegister = async () => {
               </a>
               <button
                 style={styles.copyBtn}
-                onClick={() =>
-                  copyToClipboard(shortLink(result.shorturl), "result")
-                }
+                onClick={() => copyToClipboard(shortLink(result.shorturl), "result")}
               >
                 {copied === "result" ? "Copied" : "Copy"}
               </button>
@@ -544,9 +527,7 @@ const handleRegister = async () => {
                       </a>
                       <button
                         style={styles.copySmall}
-                        onClick={() =>
-                          copyToClipboard(shortLink(url.shorturl), url.id)
-                        }
+                        onClick={() => copyToClipboard(shortLink(url.shorturl), url.id)}
                       >
                         {copied === url.id ? "Copied" : "Copy"}
                       </button>
@@ -583,390 +564,191 @@ const styles = {
   bootInner: { display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" },
   bootText: { color: "#6060a0", fontSize: "14px", margin: 0 },
   blob1: {
-    position: "fixed",
-    top: "-200px",
-    left: "-200px",
-    width: "600px",
-    height: "600px",
+    position: "fixed", top: "-200px", left: "-200px", width: "600px", height: "600px",
     borderRadius: "50%",
     background: "radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 70%)",
-    pointerEvents: "none",
-    zIndex: 0,
+    pointerEvents: "none", zIndex: 0,
   },
   blob2: {
-    position: "fixed",
-    bottom: "-150px",
-    right: "-150px",
-    width: "500px",
-    height: "500px",
+    position: "fixed", bottom: "-150px", right: "-150px", width: "500px", height: "500px",
     borderRadius: "50%",
     background: "radial-gradient(circle, rgba(168,85,247,0.12) 0%, transparent 70%)",
-    pointerEvents: "none",
-    zIndex: 0,
+    pointerEvents: "none", zIndex: 0,
   },
   blob3: {
-    position: "fixed",
-    top: "50%",
-    left: "50%",
-    transform: "translate(-50%,-50%)",
-    width: "800px",
-    height: "400px",
-    borderRadius: "50%",
+    position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+    width: "800px", height: "400px", borderRadius: "50%",
     background: "radial-gradient(circle, rgba(6,214,160,0.04) 0%, transparent 70%)",
-    pointerEvents: "none",
-    zIndex: 0,
+    pointerEvents: "none", zIndex: 0,
   },
   toast: {
-    position: "fixed",
-    top: "80px",
-    right: "24px",
-    padding: "12px 24px",
-    borderRadius: "12px",
-    color: "#fff",
-    fontWeight: 600,
-    fontSize: "14px",
-    zIndex: 1000,
-    maxWidth: "340px",
-    lineHeight: 1.5,
+    position: "fixed", top: "80px", right: "24px", padding: "12px 24px",
+    borderRadius: "12px", color: "#fff", fontWeight: 600, fontSize: "14px",
+    zIndex: 1000, maxWidth: "340px", lineHeight: 1.5,
     boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
   },
   nav: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "20px 40px",
-    position: "relative",
-    zIndex: 10,
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "20px 40px", position: "relative", zIndex: 10,
     borderBottom: "1px solid rgba(255,255,255,0.06)",
   },
   logo: {
-    fontSize: "22px",
-    fontWeight: 800,
-    cursor: "pointer",
+    fontSize: "22px", fontWeight: 800, cursor: "pointer",
     background: "linear-gradient(135deg, #818cf8, #c084fc)",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
+    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
     letterSpacing: "-0.5px",
   },
   navLinks: { display: "flex", alignItems: "center", gap: "12px" },
   navUser: { fontSize: "14px", color: "#a0a0b8", marginRight: "8px" },
   navBtn: {
-    padding: "8px 18px",
-    borderRadius: "10px",
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "transparent",
-    color: "#e8e8f0",
-    cursor: "pointer",
-    fontSize: "14px",
-    fontWeight: 500,
+    padding: "8px 18px", borderRadius: "10px",
+    border: "1px solid rgba(255,255,255,0.12)", background: "transparent",
+    color: "#e8e8f0", cursor: "pointer", fontSize: "14px", fontWeight: 500,
     transition: "all 0.2s",
   },
   navBtnPrimary: {
     background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-    border: "none",
-    color: "#fff",
+    border: "none", color: "#fff",
   },
-  hero: {
-    textAlign: "center",
-    padding: "100px 24px 60px",
-    position: "relative",
-    zIndex: 1,
-  },
+  hero: { textAlign: "center", padding: "100px 24px 60px", position: "relative", zIndex: 1 },
   heroTag: {
-    display: "inline-block",
-    padding: "6px 16px",
-    background: "rgba(99,102,241,0.15)",
-    border: "1px solid rgba(99,102,241,0.3)",
-    borderRadius: "100px",
-    fontSize: "13px",
-    color: "#818cf8",
-    marginBottom: "24px",
-    letterSpacing: "0.5px",
+    display: "inline-block", padding: "6px 16px",
+    background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)",
+    borderRadius: "100px", fontSize: "13px", color: "#818cf8",
+    marginBottom: "24px", letterSpacing: "0.5px",
   },
   heroTitle: {
-    fontSize: "clamp(40px, 7vw, 76px)",
-    fontWeight: 900,
-    lineHeight: 1.1,
-    margin: "0 0 24px",
-    letterSpacing: "-2px",
-    color: "#f0f0ff",
+    fontSize: "clamp(40px, 7vw, 76px)", fontWeight: 900, lineHeight: 1.1,
+    margin: "0 0 24px", letterSpacing: "-2px", color: "#f0f0ff",
   },
   accent: {
     background: "linear-gradient(135deg, #818cf8, #c084fc)",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
+    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
   },
   heroSub: {
-    fontSize: "18px",
-    color: "#7070a0",
-    maxWidth: "480px",
-    margin: "0 auto 40px",
-    lineHeight: 1.6,
+    fontSize: "18px", color: "#7070a0", maxWidth: "480px",
+    margin: "0 auto 40px", lineHeight: 1.6,
   },
   heroBtns: { display: "flex", gap: "16px", justifyContent: "center", flexWrap: "wrap" },
   btnPrimary: {
-    padding: "14px 32px",
-    borderRadius: "14px",
-    border: "none",
-    background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: "16px",
-    fontWeight: 700,
-    letterSpacing: "-0.3px",
-    width: "100%",
-    marginTop: "8px",
-    boxShadow: "0 8px 32px rgba(99,102,241,0.35)",
+    padding: "14px 32px", borderRadius: "14px", border: "none",
+    background: "linear-gradient(135deg, #6366f1, #8b5cf6)", color: "#fff",
+    cursor: "pointer", fontSize: "16px", fontWeight: 700, letterSpacing: "-0.3px",
+    width: "100%", marginTop: "8px", boxShadow: "0 8px 32px rgba(99,102,241,0.35)",
     transition: "transform 0.15s, box-shadow 0.15s",
   },
   btnInline: { width: "auto", marginTop: 0 },
   btnGhost: {
-    padding: "14px 32px",
-    borderRadius: "14px",
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "transparent",
-    color: "#a0a0c0",
-    cursor: "pointer",
-    fontSize: "16px",
-    fontWeight: 600,
+    padding: "14px 32px", borderRadius: "14px",
+    border: "1px solid rgba(255,255,255,0.12)", background: "transparent",
+    color: "#a0a0c0", cursor: "pointer", fontSize: "16px", fontWeight: 600,
   },
   heroStats: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: "32px",
-    marginTop: "64px",
+    display: "flex", justifyContent: "center", alignItems: "center",
+    gap: "32px", marginTop: "64px",
   },
   stat: { display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" },
   statNum: { fontSize: "28px", fontWeight: 800, color: "#f0f0ff" },
   statLabel: {
-    fontSize: "12px",
-    color: "#6060a0",
-    textTransform: "uppercase",
-    letterSpacing: "1px",
+    fontSize: "12px", color: "#6060a0",
+    textTransform: "uppercase", letterSpacing: "1px",
   },
-  statDivider: {
-    width: "1px",
-    height: "40px",
-    background: "rgba(255,255,255,0.08)",
-  },
+  statDivider: { width: "1px", height: "40px", background: "rgba(255,255,255,0.08)" },
   formWrap: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    minHeight: "calc(100vh - 80px)",
-    padding: "24px",
-    position: "relative",
-    zIndex: 1,
+    display: "flex", justifyContent: "center", alignItems: "center",
+    minHeight: "calc(100vh - 80px)", padding: "24px",
+    position: "relative", zIndex: 1,
   },
   card: {
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: "24px",
-    padding: "40px",
-    width: "100%",
-    maxWidth: "400px",
-    backdropFilter: "blur(20px)",
-    display: "flex",
-    flexDirection: "column",
-    gap: "12px",
+    background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "24px", padding: "40px", width: "100%", maxWidth: "400px",
+    backdropFilter: "blur(20px)", display: "flex", flexDirection: "column", gap: "12px",
   },
-  cardTitle: {
-    fontSize: "26px",
-    fontWeight: 800,
-    textAlign: "center",
-    margin: 0,
-    color: "#f0f0ff",
-  },
-  cardSub: {
-    fontSize: "14px",
-    color: "#7070a0",
-    textAlign: "center",
-    margin: "0 0 8px",
-  },
+  cardTitle: { fontSize: "26px", fontWeight: 800, textAlign: "center", margin: 0, color: "#f0f0ff" },
+  cardSub: { fontSize: "14px", color: "#7070a0", textAlign: "center", margin: "0 0 8px" },
   input: {
-    padding: "14px 16px",
-    borderRadius: "12px",
+    padding: "14px 16px", borderRadius: "12px",
     border: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(255,255,255,0.05)",
-    color: "#e8e8f0",
-    fontSize: "15px",
-    outline: "none",
-    transition: "border 0.2s",
+    background: "rgba(255,255,255,0.05)", color: "#e8e8f0",
+    fontSize: "15px", outline: "none", transition: "border 0.2s",
   },
   error: {
-    background: "rgba(255,77,109,0.12)",
-    border: "1px solid rgba(255,77,109,0.3)",
-    borderRadius: "10px",
-    padding: "10px 14px",
-    color: "#ff4d6d",
-    fontSize: "14px",
-    lineHeight: 1.5,
+    background: "rgba(255,77,109,0.12)", border: "1px solid rgba(255,77,109,0.3)",
+    borderRadius: "10px", padding: "10px 14px", color: "#ff4d6d",
+    fontSize: "14px", lineHeight: 1.5,
   },
   oauthDivider: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    color: "#5050a0",
-    fontSize: "13px",
+    display: "flex", alignItems: "center", gap: "12px",
+    color: "#5050a0", fontSize: "13px",
   },
-  oauthDividerLine: {
-    flex: 1,
-    height: "1px",
-    background: "rgba(255,255,255,0.08)",
-  },
+  oauthDividerLine: { flex: 1, height: "1px", background: "rgba(255,255,255,0.08)" },
   oauthBtns: { display: "flex", gap: "12px" },
   oauthBtn: {
-    flex: 1,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "8px",
-    padding: "12px",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(255,255,255,0.04)",
-    color: "#c0c0e0",
-    fontSize: "14px",
-    fontWeight: 600,
-    textDecoration: "none",
-    transition: "background 0.2s",
+    flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+    gap: "8px", padding: "12px", borderRadius: "12px",
+    border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)",
+    color: "#c0c0e0", fontSize: "14px", fontWeight: 600,
+    textDecoration: "none", transition: "background 0.2s",
   },
-  switchText: {
-    textAlign: "center",
-    fontSize: "14px",
-    color: "#6060a0",
-    margin: 0,
-  },
+  switchText: { textAlign: "center", fontSize: "14px", color: "#6060a0", margin: 0 },
   link: { color: "#818cf8", cursor: "pointer", fontWeight: 600 },
   dashboard: {
-    maxWidth: "760px",
-    margin: "0 auto",
-    padding: "40px 24px",
-    position: "relative",
-    zIndex: 1,
+    maxWidth: "760px", margin: "0 auto", padding: "40px 24px",
+    position: "relative", zIndex: 1,
   },
   dashHeader: { marginBottom: "32px" },
-  dashTitle: {
-    fontSize: "32px",
-    fontWeight: 800,
-    margin: "0 0 8px",
-    color: "#f0f0ff",
-  },
+  dashTitle: { fontSize: "32px", fontWeight: 800, margin: "0 0 8px", color: "#f0f0ff" },
   dashSub: { fontSize: "15px", color: "#6060a0", margin: 0 },
   shortenerBox: {
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: "20px",
-    padding: "24px",
-    marginBottom: "24px",
+    background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "20px", padding: "24px", marginBottom: "24px",
   },
   shortenerInner: { display: "flex", gap: "12px" },
   shortenerInput: {
-    flex: 1,
-    minWidth: 0,
-    padding: "14px 18px",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(255,255,255,0.05)",
-    color: "#e8e8f0",
-    fontSize: "15px",
-    outline: "none",
+    flex: 1, minWidth: 0, padding: "14px 18px", borderRadius: "12px",
+    border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)",
+    color: "#e8e8f0", fontSize: "15px", outline: "none",
   },
   shortenerBtn: {
-    padding: "14px 24px",
-    borderRadius: "12px",
-    border: "none",
-    background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: "15px",
-    fontWeight: 700,
-    whiteSpace: "nowrap",
+    padding: "14px 24px", borderRadius: "12px", border: "none",
+    background: "linear-gradient(135deg, #6366f1, #8b5cf6)", color: "#fff",
+    cursor: "pointer", fontSize: "15px", fontWeight: 700, whiteSpace: "nowrap",
     boxShadow: "0 4px 20px rgba(99,102,241,0.4)",
   },
   resultBox: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    flexWrap: "wrap",
-    background: "rgba(6,214,160,0.08)",
-    border: "1px solid rgba(6,214,160,0.2)",
-    borderRadius: "14px",
-    padding: "16px 20px",
-    marginBottom: "24px",
+    display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap",
+    background: "rgba(6,214,160,0.08)", border: "1px solid rgba(6,214,160,0.2)",
+    borderRadius: "14px", padding: "16px 20px", marginBottom: "24px",
   },
   resultLabel: { fontSize: "13px", color: "#06d6a0", fontWeight: 600 },
   resultLink: { color: "#06d6a0", fontWeight: 700, fontSize: "15px" },
   copyBtn: {
-    padding: "6px 14px",
-    borderRadius: "8px",
-    border: "none",
-    background: "rgba(6,214,160,0.2)",
-    color: "#06d6a0",
-    cursor: "pointer",
-    fontSize: "13px",
-    fontWeight: 600,
-    marginLeft: "auto",
+    padding: "6px 14px", borderRadius: "8px", border: "none",
+    background: "rgba(6,214,160,0.2)", color: "#06d6a0",
+    cursor: "pointer", fontSize: "13px", fontWeight: 600, marginLeft: "auto",
   },
   urlList: { display: "flex", flexDirection: "column", gap: "12px" },
-  emptyState: {
-    textAlign: "center",
-    padding: "60px 24px",
-    color: "#5050a0",
-    fontSize: "15px",
-  },
+  emptyState: { textAlign: "center", padding: "60px 24px", color: "#5050a0", fontSize: "15px" },
   urlCard: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    background: "rgba(255,255,255,0.03)",
-    border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: "16px",
-    padding: "16px 20px",
-    transition: "border-color 0.2s",
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
+    borderRadius: "16px", padding: "16px 20px", transition: "border-color 0.2s",
   },
   urlCardLeft: { flex: 1, minWidth: 0 },
-  urlShort: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    marginBottom: "6px",
-  },
-  urlShortLink: {
-    color: "#818cf8",
-    fontWeight: 700,
-    fontSize: "15px",
-    textDecoration: "none",
-  },
+  urlShort: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" },
+  urlShortLink: { color: "#818cf8", fontWeight: 700, fontSize: "15px", textDecoration: "none" },
   copySmall: {
-    padding: "3px 10px",
-    borderRadius: "6px",
-    border: "none",
-    background: "rgba(129,140,248,0.15)",
-    color: "#818cf8",
-    cursor: "pointer",
-    fontSize: "12px",
-    fontWeight: 600,
+    padding: "3px 10px", borderRadius: "6px", border: "none",
+    background: "rgba(129,140,248,0.15)", color: "#818cf8",
+    cursor: "pointer", fontSize: "12px", fontWeight: 600,
   },
   urlLong: {
-    color: "#5050a0",
-    fontSize: "13px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    maxWidth: "500px",
+    color: "#5050a0", fontSize: "13px", overflow: "hidden",
+    textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "500px",
   },
   deleteBtn: {
-    background: "rgba(255,77,109,0.1)",
-    border: "none",
-    borderRadius: "10px",
-    padding: "10px 14px",
-    cursor: "pointer",
-    fontSize: "13px",
-    fontWeight: 600,
-    color: "#ff4d6d",
-    marginLeft: "16px",
-    transition: "background 0.2s",
+    background: "rgba(255,77,109,0.1)", border: "none", borderRadius: "10px",
+    padding: "10px 14px", cursor: "pointer", fontSize: "13px", fontWeight: 600,
+    color: "#ff4d6d", marginLeft: "16px", transition: "background 0.2s",
   },
 };
