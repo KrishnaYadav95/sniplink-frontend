@@ -164,11 +164,12 @@ export default function App() {
     setLoading(false);
   };
 
-  const handleLogin = async () => {
-    setAuthError("");
-    setLoading(true);
-    try {
-      const res = await request("/user/login", {
+ const handleLogin = async () => {
+  setAuthError("");
+  setLoading(true);
+  console.log("Sending:", JSON.stringify(authForm)); // add this
+  try {
+    const res = await request("/user/login", {
         method: "POST",
         body: JSON.stringify(authForm),
       });
