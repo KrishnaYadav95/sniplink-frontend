@@ -117,15 +117,16 @@ export default function App() {
 
         if (cancelled) return;
 
-        if (res.ok) {
-          const data = await res.json();
-          if (data.authenticated) {
-            setUser(data.username);
-            setPage("dashboard");
-            loadUrls();
-            return;
-          }
-        } else if (res.status === 401 || res.status === 403) {
+       if (res.ok) {
+    const data = await res.json();
+    if (data.token) {
+        localStorage.setItem(TOKEN_KEY, data.token);  // store first
+    }
+    setUser(data.username || authForm.username);
+    setAuthForm(initialAuth);
+    setPage("dashboard");  // then update state
+    loadUrls();
+}else if (res.status === 401 || res.status === 403) {
           // stale/invalid token left over from a previous session
           localStorage.removeItem(TOKEN_KEY);
         }
