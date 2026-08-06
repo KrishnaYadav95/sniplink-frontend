@@ -188,13 +188,19 @@ export default function App() {
   };
 
   const handleLogin = async () => {
-    setAuthError("");
-    setLoading(true);
+  setAuthError("");
+  setLoading(true);
+
+  const maxAttempts = 3;
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
     try {
       const res = await request("/user/login", {
         method: "POST",
         body: JSON.stringify(authForm),
       });
+
       if (res.ok) {
         const data = await res.json();
         const token = data.token;
@@ -205,18 +211,39 @@ export default function App() {
         setAuthForm(initialAuth);
         setPage("dashboard");
         await loadUrls(true, token);
-      } else if (res.status === 401 || res.status === 403) {
-        setAuthError("Wrong username or password.");
-      } else if ([500, 502, 503, 504].includes(res.status)) {
-        setAuthError("Backend server error or starting up. Please try again in a moment.");
-      } else {
-        setAuthError("Something went wrong signing in.");
+        setLoading(false);
+        return;
       }
+
+      // If invalid credentials, stop immediately—don't retry
+      if (res.status === 401 || res.status === 403) {
+        setAuthError("Wrong username or password.");
+        setLoading(false);
+        return;
+      }
+
+      // If server error / cold boot, wait 4 seconds and retry automatically
+      if ([500, 502, 503, 504].includes(res.status) && attempt < maxAttempts - 1) {
+        attempt++;
+        await sleep(4000);
+        continue;
+      }
+
+      setAuthError("Something went wrong signing in. Please try again.");
+      break;
     } catch {
+      if (attempt < maxAttempts - 1) {
+        attempt++;
+        await sleep(4000);
+        continue;
+      }
       setAuthError(OFFLINE_MSG);
+      break;
     }
-    setLoading(false);
-  };
+  }
+
+  setLoading(false);
+};
 
   const handleLogout = async () => {
     try {
