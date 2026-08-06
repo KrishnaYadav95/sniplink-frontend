@@ -12,6 +12,7 @@ const OFFLINE_MSG =
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const request = async (path, options = {}) => {
+  // Read token fresh each time
   const token = localStorage.getItem(TOKEN_KEY);
   const RETRY_STATUS = [502, 503, 504];
 
@@ -53,6 +54,7 @@ export default function App() {
   const [authForm, setAuthForm] = useState(initialAuth);
   const [authError, setAuthError] = useState("");
   const [urls, setUrls] = useState([]);
+  const [urlsLoading, setUrlsLoading] = useState(false);
   const [longUrl, setLongUrl] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -64,25 +66,63 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // loadUrls does NOT redirect to login on 401 during dashboard load after fresh login
-  // because the JWT might still be propagating. It silently fails instead.
+  // Load URLs with retry mechanism
   const loadUrls = useCallback(async (redirectOn401 = true) => {
-    try {
-      const res = await request("/url/allurl");
-      if (res.ok) {
-        setUrls(await res.json());
-        return;
+    const maxRetries = 3;
+    let attempts = 0;
+    
+    setUrlsLoading(true);
+    
+    while (attempts < maxRetries) {
+      try {
+        const res = await request("/url/allurl");
+        
+        if (res.ok) {
+          const data = await res.json();
+          setUrls(data);
+          setUrlsLoading(false);
+          return;
+        }
+        
+        // If we get 401/403 and have retries left, wait and try again
+        if ((res.status === 401 || res.status === 403) && attempts < maxRetries - 1) {
+          attempts++;
+          // Exponential backoff: 500ms, 1000ms, 2000ms
+          await sleep(500 * Math.pow(2, attempts - 1));
+          continue; // Retry
+        }
+        
+        // If we're out of retries and need to redirect
+        if ((res.status === 401 || res.status === 403) && redirectOn401) {
+          localStorage.removeItem(TOKEN_KEY);
+          setUser(null);
+          setUrls([]);
+          setPage("login");
+          setAuthError("Your session expired. Please sign in again.");
+          setUrlsLoading(false);
+          return;
+        }
+        
+        // Handle other errors
+        if (!res.ok) {
+          setUrlsLoading(false);
+          return;
+        }
+        
+        break; // Exit loop on success
+      } catch (error) {
+        if (attempts < maxRetries - 1) {
+          attempts++;
+          await sleep(500 * Math.pow(2, attempts - 1));
+          continue;
+        }
+        showToast(OFFLINE_MSG, "error");
+        setUrlsLoading(false);
+        break;
       }
-      if ((res.status === 401 || res.status === 403) && redirectOn401) {
-        localStorage.removeItem(TOKEN_KEY);
-        setUser(null);
-        setUrls([]);
-        setPage("login");
-        setAuthError("Your session expired. Please sign in again.");
-      }
-    } catch {
-      showToast(OFFLINE_MSG, "error");
     }
+    
+    setUrlsLoading(false);
   }, []);
 
   // Bootstrap: on page load, check if user is already logged in via JWT or OAuth session
@@ -108,7 +148,8 @@ export default function App() {
           if (data.authenticated) {
             setUser(data.username);
             setPage("dashboard");
-            loadUrls(); // safe here — session already established
+            // Load URLs with retry - this will handle the token propagation delay
+            await loadUrls(true);
             return;
           }
         } else if (res.status === 401 || res.status === 403) {
@@ -135,11 +176,10 @@ export default function App() {
   }, [loadUrls]);
 
   // Load URLs whenever page becomes dashboard
-  // This handles the case where login sets page to dashboard
-  // but loadUrls() called right after login may fail due to timing
+  // This now redirects on 401 and retries automatically
   useEffect(() => {
     if (page === "dashboard" && user) {
-      loadUrls(false); // false = don't redirect on 401, just fail silently
+      loadUrls(true);
     }
   }, [page, user, loadUrls]);
 
@@ -164,26 +204,25 @@ export default function App() {
     setLoading(false);
   };
 
- const handleLogin = async () => {
-  setAuthError("");
-  setLoading(true);
-  console.log("Sending:", JSON.stringify(authForm)); // add this
-  try {
-    const res = await request("/user/login", {
+  const handleLogin = async () => {
+    setAuthError("");
+    setLoading(true);
+    try {
+      const res = await request("/user/login", {
         method: "POST",
         body: JSON.stringify(authForm),
       });
       if (res.ok) {
         const data = await res.json();
-        // Store token FIRST before any state update
+        // Store token FIRST
         if (data.token) {
           localStorage.setItem(TOKEN_KEY, data.token);
         }
         setUser(data.username || authForm.username);
         setAuthForm(initialAuth);
         setPage("dashboard");
-        // Don't call loadUrls() here — the useEffect above handles it
-        // when page becomes "dashboard", avoiding the race condition
+        // loadUrls will be triggered by the useEffect above
+        // No need to call it here - avoids race condition
       } else if (res.status === 401 || res.status === 403) {
         setAuthError("Wrong username or password.");
       } else if ([500, 502, 503, 504].includes(res.status)) {
@@ -221,7 +260,7 @@ export default function App() {
       if (res.ok) {
         setResult(await res.json());
         setLongUrl("");
-        loadUrls(false);
+        await loadUrls(false);
         showToast("Short URL created!");
       } else if (res.status === 401 || res.status === 403) {
         localStorage.removeItem(TOKEN_KEY);
@@ -509,7 +548,11 @@ export default function App() {
           )}
 
           <div style={styles.urlList}>
-            {urls.length === 0 ? (
+            {urlsLoading ? (
+              <div style={styles.emptyState}>
+                <p>Loading your links...</p>
+              </div>
+            ) : urls.length === 0 ? (
               <div style={styles.emptyState}>
                 <p>No links yet. Shorten your first URL above.</p>
               </div>
@@ -732,24 +775,3 @@ const styles = {
   emptyState: { textAlign: "center", padding: "60px 24px", color: "#5050a0", fontSize: "15px" },
   urlCard: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: "16px", padding: "16px 20px", transition: "border-color 0.2s",
-  },
-  urlCardLeft: { flex: 1, minWidth: 0 },
-  urlShort: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" },
-  urlShortLink: { color: "#818cf8", fontWeight: 700, fontSize: "15px", textDecoration: "none" },
-  copySmall: {
-    padding: "3px 10px", borderRadius: "6px", border: "none",
-    background: "rgba(129,140,248,0.15)", color: "#818cf8",
-    cursor: "pointer", fontSize: "12px", fontWeight: 600,
-  },
-  urlLong: {
-    color: "#5050a0", fontSize: "13px", overflow: "hidden",
-    textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "500px",
-  },
-  deleteBtn: {
-    background: "rgba(255,77,109,0.1)", border: "none", borderRadius: "10px",
-    padding: "10px 14px", cursor: "pointer", fontSize: "13px", fontWeight: 600,
-    color: "#ff4d6d", marginLeft: "16px", transition: "background 0.2s",
-  },
-};
