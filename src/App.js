@@ -12,19 +12,19 @@ const OFFLINE_MSG =
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const request = async (path, options = {}) => {
-  // Read token fresh each time
-  const token = localStorage.getItem(TOKEN_KEY);
+  const { overrideToken, ...fetchOptions } = options;
+  const token = overrideToken || localStorage.getItem(TOKEN_KEY);
   const RETRY_STATUS = [502, 503, 504];
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const response = await fetch(`${API}${path}`, {
         credentials: "include",
-        ...options,
+        ...fetchOptions,
         headers: {
-          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...(fetchOptions.body ? { "Content-Type": "application/json" } : {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...options.headers,
+          ...fetchOptions.headers,
         },
       });
 
@@ -66,8 +66,7 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Load URLs with retry mechanism
-  const loadUrls = useCallback(async (redirectOn401 = true) => {
+  const loadUrls = useCallback(async (redirectOn401 = true, explicitToken = null) => {
     const maxRetries = 3;
     let attempts = 0;
     
@@ -75,7 +74,7 @@ export default function App() {
     
     while (attempts < maxRetries) {
       try {
-        const res = await request("/url/allurl");
+        const res = await request("/url/allurl", { overrideToken: explicitToken });
         
         if (res.ok) {
           const data = await res.json();
@@ -84,15 +83,12 @@ export default function App() {
           return;
         }
         
-        // If we get 401/403 and have retries left, wait and try again
         if ((res.status === 401 || res.status === 403) && attempts < maxRetries - 1) {
           attempts++;
-          // Exponential backoff: 500ms, 1000ms, 2000ms
           await sleep(500 * Math.pow(2, attempts - 1));
-          continue; // Retry
+          continue;
         }
         
-        // If we're out of retries and need to redirect
         if ((res.status === 401 || res.status === 403) && redirectOn401) {
           localStorage.removeItem(TOKEN_KEY);
           setUser(null);
@@ -103,13 +99,12 @@ export default function App() {
           return;
         }
         
-        // Handle other errors
         if (!res.ok) {
           setUrlsLoading(false);
           return;
         }
         
-        break; // Exit loop on success
+        break;
       } catch (error) {
         if (attempts < maxRetries - 1) {
           attempts++;
@@ -125,7 +120,6 @@ export default function App() {
     setUrlsLoading(false);
   }, []);
 
-  // Bootstrap: on page load, check if user is already logged in via JWT or OAuth session
   useEffect(() => {
     let cancelled = false;
 
@@ -144,16 +138,13 @@ export default function App() {
 
         if (res.ok) {
           const data = await res.json();
-          // /user/me returns { authenticated: true, username: "..." }
           if (data.authenticated) {
             setUser(data.username);
             setPage("dashboard");
-            // Load URLs with retry - this will handle the token propagation delay
             await loadUrls(true);
             return;
           }
         } else if (res.status === 401 || res.status === 403) {
-          // stale or invalid token — clear it
           localStorage.removeItem(TOKEN_KEY);
         }
 
@@ -174,14 +165,6 @@ export default function App() {
       cancelled = true;
     };
   }, [loadUrls]);
-
-  // Load URLs whenever page becomes dashboard
-  // This now redirects on 401 and retries automatically
-  useEffect(() => {
-    if (page === "dashboard" && user) {
-      loadUrls(true);
-    }
-  }, [page, user, loadUrls]);
 
   const handleRegister = async () => {
     setAuthError("");
@@ -214,15 +197,14 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        // Store token FIRST
-        if (data.token) {
-          localStorage.setItem(TOKEN_KEY, data.token);
+        const token = data.token;
+        if (token) {
+          localStorage.setItem(TOKEN_KEY, token);
         }
         setUser(data.username || authForm.username);
         setAuthForm(initialAuth);
         setPage("dashboard");
-        // loadUrls will be triggered by the useEffect above
-        // No need to call it here - avoids race condition
+        await loadUrls(true, token);
       } else if (res.status === 401 || res.status === 403) {
         setAuthError("Wrong username or password.");
       } else if ([500, 502, 503, 504].includes(res.status)) {
@@ -888,21 +870,20 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     gap: "8px",
-    padding: "12px",
+    padding: "10px 16px",
     borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(255,255,255,0.04)",
-    color: "#c0c0e0",
-    fontSize: "14px",
-    fontWeight: 600,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.05)",
+    color: "#e8e8f0",
     textDecoration: "none",
-    transition: "background 0.2s",
+    fontSize: "14px",
+    fontWeight: 500,
   },
   switchText: {
     textAlign: "center",
+    color: "#7070a0",
     fontSize: "14px",
-    color: "#6060a0",
-    margin: 0,
+    margin: "8px 0 0",
   },
   link: {
     color: "#818cf8",
@@ -910,7 +891,7 @@ const styles = {
     fontWeight: 600,
   },
   dashboard: {
-    maxWidth: "760px",
+    maxWidth: "800px",
     margin: "0 auto",
     padding: "40px 24px",
     position: "relative",
@@ -926,50 +907,133 @@ const styles = {
     color: "#f0f0ff",
   },
   dashSub: {
-    fontSize: "15px",
-    color: "#6060a0",
+    color: "#7070a0",
     margin: 0,
   },
   shortenerBox: {
     background: "rgba(255,255,255,0.04)",
     border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: "20px",
-    padding: "24px",
+    padding: "8px",
     marginBottom: "24px",
+    backdropFilter: "blur(20px)",
   },
   shortenerInner: {
     display: "flex",
-    gap: "12px",
+    gap: "8px",
   },
   shortenerInput: {
     flex: 1,
-    minWidth: 0,
+    background: "transparent",
+    border: "none",
     padding: "14px 18px",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(255,255,255,0.05)",
     color: "#e8e8f0",
     fontSize: "15px",
     outline: "none",
   },
   shortenerBtn: {
-    padding: "14px 24px",
-    borderRadius: "12px",
+    padding: "12px 28px",
+    borderRadius: "14px",
     border: "none",
     background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
     color: "#fff",
-    cursor: "pointer",
-    fontSize: "15px",
     fontWeight: 700,
-    whiteSpace: "nowrap",
-    boxShadow: "0 4px 20px rgba(99,102,241,0.4)",
+    cursor: "pointer",
   },
   resultBox: {
+    background: "rgba(6,214,160,0.1)",
+    border: "1px solid rgba(6,214,160,0.3)",
+    borderRadius: "16px",
+    padding: "16px 20px",
     display: "flex",
     alignItems: "center",
     gap: "12px",
-    flexWrap: "wrap",
-    background: "rgba(6,214,160,0.08)",
-    border: "1px solid rgba(6,214,160,0.2)",
-    borderRadius: "14px",
-    padding: "16px 20px
+    marginBottom: "32px",
+  },
+  resultLabel: {
+    color: "#06d6a0",
+    fontWeight: 600,
+    fontSize: "14px",
+  },
+  resultLink: {
+    color: "#fff",
+    flex: 1,
+    textDecoration: "none",
+    fontWeight: 500,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  copyBtn: {
+    background: "#06d6a0",
+    color: "#000",
+    border: "none",
+    padding: "6px 16px",
+    borderRadius: "8px",
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  urlList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+  },
+  emptyState: {
+    textAlign: "center",
+    padding: "48px 24px",
+    color: "#6060a0",
+  },
+  urlCard: {
+    background: "rgba(255,255,255,0.02)",
+    border: "1px solid rgba(255,255,255,0.06)",
+    borderRadius: "16px",
+    padding: "20px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "16px",
+  },
+  urlCardLeft: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "6px",
+    overflow: "hidden",
+  },
+  urlShort: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+  },
+  urlShortLink: {
+    color: "#818cf8",
+    fontWeight: 700,
+    fontSize: "16px",
+    textDecoration: "none",
+  },
+  copySmall: {
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    color: "#a0a0c0",
+    padding: "4px 10px",
+    borderRadius: "6px",
+    fontSize: "12px",
+    cursor: "pointer",
+  },
+  urlLong: {
+    color: "#6060a0",
+    fontSize: "14px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  deleteBtn: {
+    background: "rgba(255,77,109,0.1)",
+    border: "1px solid rgba(255,77,109,0.2)",
+    color: "#ff4d6d",
+    padding: "8px 16px",
+    borderRadius: "10px",
+    cursor: "pointer",
+    fontSize: "13px",
+    fontWeight: 600,
+  },
+};
