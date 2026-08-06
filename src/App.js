@@ -14,9 +14,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const request = async (path, options = {}) => {
   const { overrideToken, ...fetchOptions } = options;
   const token = overrideToken || localStorage.getItem(TOKEN_KEY);
-  const RETRY_STATUS = [502, 503, 504];
+  const RETRY_STATUS = [500, 502, 503, 504];
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const response = await fetch(`${API}${path}`, {
         credentials: "include",
@@ -28,15 +28,15 @@ const request = async (path, options = {}) => {
         },
       });
 
-      if (RETRY_STATUS.includes(response.status) && attempt < 2) {
-        await sleep(8000);
+      if (RETRY_STATUS.includes(response.status) && attempt < 4) {
+        await sleep(10000);
         continue;
       }
 
       return response;
     } catch (err) {
-      if (attempt < 2) {
-        await sleep(8000);
+      if (attempt < 4) {
+        await sleep(10000);
         continue;
       }
       throw new Error("offline");
@@ -208,7 +208,7 @@ export default function App() {
       } else if (res.status === 401 || res.status === 403) {
         setAuthError("Wrong username or password.");
       } else if ([500, 502, 503, 504].includes(res.status)) {
-        setAuthError("Starting backend... Please wait 20-30 seconds and try again.");
+        setAuthError("Backend server error or starting up. Please try again in a moment.");
       } else {
         setAuthError("Something went wrong signing in.");
       }
